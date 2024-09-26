@@ -10,6 +10,7 @@ module Codeowners
 
       def call(org, debug)
         response = client.fetch(org, debug)
+        pp response
         org = client.org(response)
         users = client.org_members(response)
         users = client.users(response)
