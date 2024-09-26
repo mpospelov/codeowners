@@ -21,7 +21,7 @@ module Codeowners
 
         Tempfile.open("codeowners-storage") do |tmp|
           tmp.binmode
-          tmp.write(JSON.generate(data.dump))
+          tmp.write(JSON.pretty_generate(data.dump))
           tmp.close
 
           FileUtils.mv(tmp.path, path, force: true)
@@ -38,7 +38,7 @@ module Codeowners
     def blacklisted_team?(team)
       data[:teams].find do |record|
         record.fetch("slug") == team &&
-          record.fetch("blacklisted")
+          record.fetch("blacklisted", false)
       end
     end
 
@@ -58,7 +58,7 @@ module Codeowners
       return [] if memberships.empty?
 
       teams = data[:teams].find_all do |record|
-        !record.fetch("blacklisted") &&
+        !record.fetch("blacklisted", false) &&
           memberships.include?(record.fetch("id"))
       end.flatten
 

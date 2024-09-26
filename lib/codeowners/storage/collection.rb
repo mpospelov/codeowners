@@ -21,7 +21,7 @@ module Codeowners
         records = Array(records).flatten
 
         records.each do |record|
-          collection[record.fetch(:id)] = record
+          collection[record.fetch(:id)] = collection[record.fetch(:id)].transform_keys!(&:to_sym).merge(record)
         end
       end
 

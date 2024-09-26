@@ -10,6 +10,33 @@ module Codeowners
       private_constant :BASE_URL
 
       USER_AGENT = "codeowners v#{Codeowners::VERSION}"
+      QUERY = <<~GRAPHQL
+        query ($first: Int, $after: String, $org: String!) {
+          organization(login: $org) {
+            id: databaseId
+            login
+            teams(first: $first, after: $after) {
+              pageInfo {
+                hasNextPage
+                endCursor
+              }
+              nodes {
+                id: databaseId
+                name
+                slug
+                members {
+                  nodes {
+                    id: databaseId
+                    login
+                    name
+                    email
+                  }
+                }
+              }
+            }
+          }
+        }
+      GRAPHQL
       private_constant :USER_AGENT
 
       def initialize(token, out, base_url = BASE_URL, user_agent = USER_AGENT, client = Excon, sleep_time: 3)
@@ -21,65 +48,79 @@ module Codeowners
         @sleep_time = sleep_time
       end
 
-      def org(login, debug = false)
-        result = get("/orgs/#{login}", debug: debug)
+      def fetch(org, debug = false)
+        end_coursor = nil
+        has_next_page = true
+        responses = []
 
+        while has_next_page
+          response = post("/graphql", JSON.dump(query: QUERY, variables: { first: 100, after: end_coursor, org: org }), debug: debug)
+          has_next_page = response.dig("data", "organization", "teams", "pageInfo", "hasNextPage")
+          end_coursor = response.dig("data", "organization", "teams", "pageInfo", "endCursor")
+          responses << response
+          sleep_for_a_while
+        end
+        result = responses[0]
+        responses[1..].each do |res|
+          result["data"]["organization"]["teams"]["nodes"] += res["data"]["organization"]["teams"]["nodes"]
+        end
+        result
+      end
+
+      def org(response)
         {
-          id: result.fetch("id"),
-          login: result.fetch("login")
+          id: response.dig("data", "organization", "id"),
+          login: response.dig("data", "organization", "login")
         }
       end
 
-      def org_members(org, debug = false)
-        result = get_paginated("/orgs/#{org.fetch(:login)}/members", debug: debug)
-        result.map do |user|
-          {
-            id: user.fetch("id"),
-            login: user.fetch("login")
-          }
-        end
+      def org_members(response)
+        response.dig("data", "organization", "teams", "nodes").each_with_object([]) do |team, memo|
+          team.fetch("members").fetch("nodes").each do |member|
+            memo << {
+              id: member.fetch("id"),
+              login: member.fetch("login")
+            }
+          end
+        end.sort_by { |member| member.fetch(:id) }
       end
 
-      def teams(org, debug = false)
-        result = get_paginated("/orgs/#{org.fetch(:login)}/teams", debug: debug)
-        result.map do |team|
+      def teams(response)
+        response.dig("data", "organization", "teams", "nodes").map do |team|
           {
             id: team.fetch("id"),
-            org_id: org.fetch(:id),
+            org_id: response.dig("data", "organization", "id"),
             name: team.fetch("name"),
             slug: team.fetch("slug")
           }
-        end
+        end.sort_by { |team| team.fetch(:id) }
       end
 
-      def team_members(org, teams, debug = false)
-        teams.each_with_object([]) do |team, memo|
-          result = get_paginated("/orgs/#{org.fetch(:login)}/teams/#{team.fetch(:slug)}/members", debug: debug)
-          result.each do |member|
-            team_id = team.fetch(:id)
+      def team_members(response)
+        response.dig("data", "organization", "teams", "nodes").each_with_object([]) do |team, memo|
+          team.fetch("members").fetch("nodes").each do |member|
+            team_id = team.fetch("id")
             user_id = member.fetch("id")
-
             memo << {
               id: [team_id, user_id],
               team_id: team_id,
               user_id: user_id
             }
           end
-
-          sleep_for_a_while
-        end
+        end.sort_by { |member| member.fetch(:id) }
       end
 
-      def users(users, debug)
-        users.each do |user|
-          remote_user = get("/users/#{user.fetch(:login)}", debug: debug)
-          user.merge!(
-            name: remote_user.fetch("name"),
-            email: remote_user.fetch("email")
-          )
-
-          sleep_for_a_while
-        end
+      def users(response)
+        response.dig("data", "organization", "teams", "nodes").each_with_object([]) do |team, memo|
+          team.fetch("members").fetch("nodes").each do |member|
+            memo << {
+              id: member.fetch("id"),
+              login: member.fetch("login"),
+              name: member.fetch("name"),
+              email: member.fetch("email")
+            }
+          end
+        end.sort_by { |member| member.fetch(:id) }
       end
 
       private
@@ -91,40 +132,20 @@ module Codeowners
       attr_reader :out
       attr_reader :sleep_time
 
-      def get(path, debug: false)
-        out.puts "requesting GET #{path}" if debug
+      def post(path, body, debug: false)
+        out.puts "requesting POST #{path}" if debug
 
-        response = client.get(base_url + path, query: query, headers: headers)
+        response = client.post(base_url + path, body: body, headers: headers)
         return {} unless response.status == 200
 
         JSON.parse(response.body)
       end
 
-      def get_paginated(path, result = [], debug: false, page: 1)
-        out.puts "requesting GET #{path}, page: #{page}" if debug
-
-        response = client.get(base_url + path, query: query(page: page), headers: headers)
-        return [] unless response.status == 200
-
-        parsed = JSON.parse(response.body)
-        result.push(parsed)
-
-        if parsed.any?
-          sleep_for_a_while
-          get_paginated(path, result, debug: debug, page: page + 1)
-        else
-          result.flatten
-        end
-      end
-
-      def query(options = {})
-        { page: 1, per_page: 100 }.merge(options)
-      end
-
       def headers
         {
           "Authorization" => "token #{token}",
-          "User-Agent" => user_agent
+          "User-Agent" => user_agent,
+          "Content-Type" => "application/json"
         }
       end
 
