@@ -44,8 +44,7 @@ module Codeowners
 
     def teams_for(user)
       found = data[:users].find do |record|
-        record.fetch("email") == user.email ||
-          record.fetch("name") == user.name
+        record.fetch("email") == user.email
       end
 
       return [] unless found
