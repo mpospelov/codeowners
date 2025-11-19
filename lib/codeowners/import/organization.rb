@@ -9,19 +9,13 @@ module Codeowners
       end
 
       def call(org, debug)
-        response = client.fetch(org, debug)
-        pp response
-        org = client.org(response)
-        users = client.org_members(response)
-        users = client.users(response)
-        teams = client.teams(response)
-        memberships = client.team_members(response)
+        data = client.fetch_org_data(org, debug)
 
         storage.transaction do |db|
-          db[:orgs].upsert(org)
-          db[:users].upsert(users)
-          db[:teams].upsert(teams)
-          db[:memberships].upsert(memberships)
+          db[:orgs].upsert(data[:org])
+          db[:users].upsert(data[:users])
+          db[:teams].upsert(data[:teams])
+          db[:memberships].upsert(data[:memberships])
         end
       end
 
